@@ -1,0 +1,7 @@
+.git
+*_test.go
+**/*_test.go
+*.exe
+api-server
+coverage.out
+*.prof

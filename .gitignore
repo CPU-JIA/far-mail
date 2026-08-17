@@ -1,0 +1,52 @@
+# 环境配置（含密码/IP等敏感信息）
+.env
+.env.*
+!.env.example
+
+# 运行时数据（admin key 等）
+data/
+backups/
+
+# Go build artifacts
+api/farmail
+api/*.exe
+frontend/server/frontend-server
+frontend/server/*.exe
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+.ace-tool/
+.playwright-mcp/
+
+# Local visual checks and database dumps
+screenshots/
+*-screenshot.png
+*-before.png
+*.dump
+*.sql.gz
+bench_*.json
+coverage.out
+*.prof
+*.tmp
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.key
+*.pem
+*.p12
+*.pfx
+tmp/
+.cache/
+frontend/.vite/

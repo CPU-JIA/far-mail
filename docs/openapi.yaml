@@ -1,0 +1,837 @@
+openapi: 3.1.0
+info:
+  title: FAR Mail API
+  version: 1.0.0
+  description: |
+    FAR Mail 的公开接口与自动化 API。服务器地址使用相对路径，始终指向
+    当前部署来源，不包含写死的生产域名或 IP。
+
+    `/api/v1` 仅接受专用 API Token 的 `Authorization: Bearer`；
+    Admin Key 仅供 `/console/v1` 使用，不能替代 API Token。
+servers:
+  - url: /
+    description: 当前部署来源
+tags:
+  - name: Domains
+    description: 可用域名池
+  - name: Mailboxes
+    description: 邮箱创建、查询和保留策略
+  - name: Email
+    description: 邮件、SSE 和清理
+  - name: Lookup
+    description: 按邮箱地址快速查询
+  - name: Donations
+    description: 域名捐赠与奖励 Token
+  - name: Public
+    description: 无需 Admin Key 或 API Token 的公开信息
+  - name: System
+    description: 健康检查
+paths:
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: 健康检查
+      security: []
+      responses:
+        "200":
+          description: API 正常运行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /public/v1/settings:
+    get:
+      tags: [Public]
+      operationId: getPublicSettings
+      summary: 读取公开站点配置
+      security: []
+      responses:
+        "200":
+          description: 当前部署的公开设置
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /public/v1/logo:
+    get:
+      tags: [Public]
+      operationId: getPublicLogo
+      summary: 读取站点 Logo
+      security: []
+      responses:
+        "200":
+          description: Logo 二进制内容
+          content:
+            image/png: {}
+            image/jpeg: {}
+            image/webp: {}
+            image/svg+xml: {}
+        "302":
+          description: 重定向到站长配置的外部 Logo
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /public/v1/domains/submit:
+    post:
+      tags: [Donations]
+      operationId: submitDomainDonation
+      summary: 首次捐赠域名
+      description: 创建待验证捐赠、独立 claim secret 和只显示一次的奖励 API Token。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DonationSubmit"
+      responses:
+        "202":
+          description: 已创建待验证捐赠
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonationSubmitResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: 捐赠页面已由站长关闭
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /public/v1/domains/status:
+    post:
+      tags: [Donations]
+      operationId: getDomainDonationStatus
+      summary: 查询捐赠验证状态
+      description: claim secret 必须放在 JSON body；不存在可枚举的 GET 状态接口。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DonationStatusRequest"
+      responses:
+        "200":
+          description: 捐赠状态与当前部署生成的 DNS 指引
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Donation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/domains:
+    get:
+      tags: [Domains]
+      operationId: listActiveDomains
+      summary: 查询可用根域池
+      responses:
+        "200":
+          description: 可用于创建邮箱的活动根域
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Domain"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/donations:
+    post:
+      tags: [Donations]
+      operationId: continueDomainDonation
+      summary: 使用已有奖励 API Token 继续捐赠
+      description: 仅接受奖励 API Token；本次续捐不消耗奖励调用额度。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DonationSubmit"
+      responses:
+        "202":
+          description: 已创建新的待验证捐赠；不会再次返回完整 Token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonationSubmitResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: 捐赠入口已关闭
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/mailboxes:
+    get:
+      tags: [Mailboxes]
+      operationId: listMailboxes
+      summary: 查询当前 Token 可访问的邮箱
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: q
+          in: query
+          schema: { type: string }
+          description: 邮箱地址搜索词
+        - name: domain
+          in: query
+          schema: { type: string }
+          description: 限定根域或子域
+        - name: keep_forever
+          in: query
+          schema: { type: boolean }
+        - name: expiring_within_hours
+          in: query
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: 分页邮箱列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MailboxPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Mailboxes]
+      operationId: createMailbox
+      summary: 创建邮箱
+      description: address 与 domain 均可省略；domain 可为活动根域或其有效子域。
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMailbox"
+      responses:
+        "201":
+          description: 邮箱已创建
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mailbox]
+                properties:
+                  mailbox:
+                    $ref: "#/components/schemas/Mailbox"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/mailboxes/retention/batch:
+    post:
+      tags: [Mailboxes]
+      operationId: batchUpdateMailboxRetention
+      summary: 批量更新邮箱保留策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids, keep_forever]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+                keep_forever: { type: boolean }
+      responses:
+        "200":
+          description: 更新结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Mailbox"
+                  updated_count: { type: integer }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/mailboxes/cleanup:
+    post:
+      tags: [Mailboxes]
+      operationId: cleanupMailboxes
+      summary: 按条件清理邮箱
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                domain: { type: string }
+                only_expired: { type: boolean }
+                only_empty: { type: boolean }
+      responses:
+        "200":
+          description: 清理统计
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/mailboxes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/MailboxID"
+    get:
+      tags: [Mailboxes]
+      operationId: getMailbox
+      summary: 读取邮箱
+      responses:
+        "200":
+          description: 邮箱详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mailbox:
+                    $ref: "#/components/schemas/Mailbox"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Mailboxes]
+      operationId: deleteMailbox
+      summary: 删除邮箱及关联邮件
+      responses:
+        "200":
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/mailboxes/{id}/retention:
+    parameters:
+      - $ref: "#/components/parameters/MailboxID"
+    put:
+      tags: [Mailboxes]
+      operationId: updateMailboxRetention
+      summary: 更新邮箱保留策略
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keep_forever]
+              properties:
+                keep_forever: { type: boolean }
+      responses:
+        "200":
+          description: 更新后的邮箱
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mailbox:
+                    $ref: "#/components/schemas/Mailbox"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/mailboxes/{id}/emails:
+    parameters:
+      - $ref: "#/components/parameters/MailboxID"
+    get:
+      tags: [Email]
+      operationId: listMailboxEmails
+      summary: 查询邮箱邮件
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 分页邮件摘要
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/mailboxes/{id}/emails/{email_id}:
+    parameters:
+      - $ref: "#/components/parameters/MailboxID"
+      - $ref: "#/components/parameters/EmailID"
+    get:
+      tags: [Email]
+      operationId: getMailboxEmail
+      summary: 读取邮件正文、验证码和验证链接
+      responses:
+        "200":
+          description: 完整邮件
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  email:
+                    $ref: "#/components/schemas/Email"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Email]
+      operationId: deleteMailboxEmail
+      summary: 删除邮件
+      responses:
+        "200":
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/mailboxes/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/MailboxID"
+    get:
+      tags: [Email]
+      operationId: streamMailboxEvents
+      summary: 实时订阅邮件到达事件
+      responses:
+        "200":
+          description: ready、email 和 heartbeat SSE 事件流
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/emails/cleanup:
+    post:
+      tags: [Email]
+      operationId: cleanupEmails
+      summary: 按条件清理历史邮件
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                domain: { type: string }
+                older_than_minutes: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: 清理统计
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/lookup/mailbox:
+    get:
+      tags: [Lookup]
+      operationId: lookupMailbox
+      summary: 按完整地址查找邮箱
+      parameters:
+        - $ref: "#/components/parameters/Address"
+      responses:
+        "200":
+          description: 邮箱信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mailbox:
+                    $ref: "#/components/schemas/Mailbox"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/lookup/latest:
+    get:
+      tags: [Lookup]
+      operationId: lookupLatestEmail
+      summary: 读取最新完整邮件
+      parameters:
+        - $ref: "#/components/parameters/Address"
+      responses:
+        "200":
+          description: 邮箱与最新邮件
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mailbox:
+                    $ref: "#/components/schemas/Mailbox"
+                  email:
+                    $ref: "#/components/schemas/Email"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/lookup/latest-code:
+    get:
+      tags: [Lookup]
+      operationId: lookupLatestCode
+      summary: 读取最新验证码
+      parameters:
+        - $ref: "#/components/parameters/Address"
+      responses:
+        "200":
+          description: 验证码投影
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LookupCode"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/lookup/latest-link:
+    get:
+      tags: [Lookup]
+      operationId: lookupLatestLink
+      summary: 读取最新验证链接
+      parameters:
+        - $ref: "#/components/parameters/Address"
+      responses:
+        "200":
+          description: 验证链接投影
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LookupLink"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: 32 lowercase hex characters
+      description: 专用 API Token。不能使用 Admin Key，也不接受 X-API-Key 或 query-string key。
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    MailboxID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EmailID:
+      name: email_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Address:
+      name: address
+      in: query
+      required: true
+      description: 完整邮箱地址
+      schema: { type: string, format: email }
+  responses:
+    BadRequest:
+      description: 请求格式或参数无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: 缺少凭据或凭据无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Token scope 不允许该操作
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: 资源不存在或当前 Token 不可访问
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: 资源冲突或奖励 Token 已达到域名上限
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: 请求速率超过限制
+      headers:
+        Retry-After:
+          schema: { type: integer }
+        RateLimit-Limit:
+          schema: { type: integer }
+        RateLimit-Remaining:
+          schema: { type: integer }
+        RateLimit-Reset:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+        message: { type: string }
+        error_code: { type: string }
+        status: { type: integer }
+        request_id: { type: string, format: uuid }
+    Health:
+      type: object
+      required: [status, time]
+      properties:
+        status: { type: string, const: ok }
+        time: { type: integer, format: int64 }
+    Domain:
+      type: object
+      required: [id, domain, is_active]
+      properties:
+        id: { type: integer, format: int64 }
+        domain: { type: string }
+        is_active: { type: boolean }
+        status: { type: string }
+        visibility: { type: string }
+        source_type: { type: string, enum: [manual, donated] }
+    CreateMailbox:
+      type: object
+      properties:
+        address:
+          type: string
+          description: 邮箱本地部分；省略时自动生成
+        domain:
+          type: string
+          description: 活动根域或其子域；省略时随机选择根域
+    Mailbox:
+      type: object
+      required: [id, address, domain_id, full_address, keep_forever, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        address: { type: string }
+        domain_id: { type: integer, format: int64 }
+        full_address: { type: string, format: email }
+        expires_at: { type: [string, "null"], format: date-time }
+        keep_forever: { type: boolean }
+        email_count: { type: integer }
+        latest_received_at: { type: [string, "null"], format: date-time }
+        latest_code: { type: string }
+        latest_link: { type: string }
+        created_at: { type: string, format: date-time }
+    MailboxPage:
+      type: object
+      required: [data, total, page, size]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Mailbox"
+        total: { type: integer }
+        page: { type: integer }
+        size: { type: integer }
+        q: { type: string }
+        domain: { type: string }
+        keep_forever: { type: boolean }
+        expiring_within_hours: { type: integer }
+    EmailSummary:
+      type: object
+      required: [id, sender, subject, received_at]
+      properties:
+        id: { type: string, format: uuid }
+        mailbox_id: { type: string, format: uuid }
+        sender: { type: string }
+        recipient: { type: string }
+        subject: { type: string }
+        has_attachments: { type: boolean }
+        parsed_code: { type: string }
+        parsed_code_source: { type: string }
+        parsed_link: { type: string }
+        parsed_link_source: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        received_at: { type: string, format: date-time }
+    Email:
+      allOf:
+        - $ref: "#/components/schemas/EmailSummary"
+        - type: object
+          properties:
+            body_text: { type: string }
+            body_html: { type: string }
+            headers:
+              type: object
+              additionalProperties: true
+    EmailPage:
+      type: object
+      required: [data, total, page, size]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailSummary"
+        total: { type: integer }
+        page: { type: integer }
+        size: { type: integer }
+    DonationSubmit:
+      type: object
+      required: [domain]
+      properties:
+        domain: { type: string, example: example.com }
+        enable_subdomains: { type: boolean, default: false }
+    DNSRecord:
+      type: object
+      required: [type, host, value]
+      properties:
+        type: { type: string, enum: [MX, TXT] }
+        host: { type: string }
+        value:
+          type: string
+          description: 由当前部署 SMTP 配置或每次捐赠 challenge 动态生成
+        priority: { type: integer }
+    DonationSubmitResult:
+      type: object
+      required: [donation_id, claim_secret, access_token, status, dns_required]
+      properties:
+        donation_id: { type: string, format: uuid }
+        claim_secret:
+          type: string
+          writeOnly: true
+          description: 独立状态查询凭据，仅首次响应返回
+        access_token:
+          type: string
+          writeOnly: true
+          description: 首次捐赠返回完整奖励 API Token；续捐返回空字符串
+        token_prefix: { type: string }
+        status: { type: string, enum: [pending, active, inactive, revoked] }
+        enable_subdomains: { type: boolean }
+        dns_required:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSRecord"
+        message: { type: string }
+    DonationStatusRequest:
+      type: object
+      required: [donation_id, claim_secret]
+      properties:
+        donation_id: { type: string, format: uuid }
+        claim_secret: { type: string, writeOnly: true }
+    Donation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        domain: { type: string }
+        status: { type: string, enum: [pending, active, inactive, revoked] }
+        is_active: { type: boolean }
+        reward_active: { type: boolean }
+        mx_checked_at: { type: [string, "null"], format: date-time }
+        last_checked_at: { type: [string, "null"], format: date-time }
+        last_error: { type: string }
+        dns_required:
+          type: array
+          items:
+            $ref: "#/components/schemas/DNSRecord"
+        effective_rate_limit_per_minute: { type: integer }
+        effective_daily_request_limit: { type: integer, format: int64 }
+        effective_total_request_limit: { type: integer, format: int64 }
+        request_count_total: { type: integer, format: int64 }
+    LookupCode:
+      type: object
+      properties:
+        mailbox:
+          $ref: "#/components/schemas/Mailbox"
+        email_id: { type: string, format: uuid }
+        sender: { type: string }
+        subject: { type: string }
+        received_at: { type: string, format: date-time }
+        code: { type: string }
+        matched_by: { type: string }
+        has_code: { type: boolean }
+    LookupLink:
+      type: object
+      properties:
+        mailbox:
+          $ref: "#/components/schemas/Mailbox"
+        email_id: { type: string, format: uuid }
+        sender: { type: string }
+        subject: { type: string }
+        received_at: { type: string, format: date-time }
+        link: { type: string, format: uri }
+        matched_by: { type: string }
+        has_link: { type: boolean }
+    DeleteResult:
+      type: object
+      additionalProperties: true
+      properties:
+        message: { type: string }
+        deleted: { type: integer }
