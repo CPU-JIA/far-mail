@@ -44,6 +44,12 @@ Remove-Item Env:FAR_MAIL_API_TOKEN, Env:FAR_MAIL_ADMIN_KEY -ErrorAction Silently
 
 这是服务器本机基线，不代表跨公网客户端的 RTT；外部用户的实测值还会叠加线路、TLS 握手和 DNS 延迟。
 
+## 邮件链路同口径复测
+
+在同一台 SG 主机上，用 1 KB 邮件、500 封、并发 100 复现旧服务记录。新版 Postfix → Go LMTP → PostgreSQL 提交成功率为 500/500，提交吞吐 **565.2 封/秒**，提交 P95 **201.9 ms**；旧记录的两轮分别为 392.9/525.4 封/秒、P95 299.8/250.3 ms。相对旧记录最佳轮次，新版吞吐约高 7.6%，提交 P95 约低 19.3%。
+
+旧库当时的存量与当前新库不同，因此这是一项实机回归信号而非严格同数据集实验；每次调整索引、连接池或 LMTP worker 后，应在相同数据量下复测。500 封测试邮箱及邮件已在复测后删除。
+
 ## 空载资源基线
 
 停止旧服务的 PostgreSQL、Redis 和 PgBouncer（保留容器、卷和备份用于回滚）后，FAR Mail 六个容器的 `docker stats --no-stream` 常驻内存约 **120.6 MiB**：PostgreSQL 79.1 MiB、API 12.1 MiB、Postfix 12.5 MiB、Redis 11.9 MiB、PgBouncer 2.3 MiB、前端 2.8 MiB。SG 主机当时可用内存约 1.06 GiB，1 分钟负载约 0.07。
